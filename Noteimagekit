@@ -1,0 +1,19 @@
+# File: .env
+imagekit Book And Cover
+IMAGEKIT_PUBLIC_KEY="public_6Lbu8+25mWBYB4w3D7vLV4u3+rY="
+IMAGEKIT_PRIVATE_KEY="private_UkW6fcFNg4kRQa4wN2h7ULLgGzU="
+IMAGEKIT_URL_ENDPOINT="https://ik.imagekit.io/9qcuiwxwi"
+
+
+YOUTUBE_API_KEY="AIzaSyBFK0lBt_a7ModdI5nXrbsyw6vGT_-jrt0"
+
+# Port for the backend server (optional, default will be 3001)
+PORT=3001
+
+imagekit Audio
+IMAGEKIT_PUBLIC_KEY="public_UdGsawGaMwPoK0Jbw2TS+eacqhI="
+IMAGEKIT_PRIVATE_KEY="private_7wKl0vdhfTon1VGZQsMm2TOdMJY="
+IMAGEKIT_URL_ENDPOINT="https://ik.imagekit.io/0jp5u0pbm"
+
+
+YOUTUBE_API_KEY="AIzaSyBFK0lBt_a7ModdI5nXrbsyw6vGT_-jrt0"
