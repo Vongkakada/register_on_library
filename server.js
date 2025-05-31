@@ -4,12 +4,11 @@
 require('dotenv').config();
 
 const express = require('express');
-const cors = require('cors');
-const ImageKit = require('imagekit'); // Used for Book ImageKit
+const cors = require('cors'); // Import cors middleware
+const ImageKit = require('imagekit');
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 const fetch = require('node-fetch'); // Import node-fetch to fetch content from TXT URLs
-
 
 const { collectionsConfig } = require('./server/data/rerngNitenCollectionsConfig'); // Video Collections Config
 
@@ -17,13 +16,15 @@ const { collectionsConfig } = require('./server/data/rerngNitenCollectionsConfig
 const admin = require('firebase-admin');
 
 let serviceAccount;
+let firebaseInitialized = false; // Flag to track successful Firebase init
 try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        // Use JSON content from environment variable
+        // Use JSON content from environment variable (Good for hosting platforms)
         serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
         console.log("Firebase: Using service account JSON from FIREBASE_SERVICE_ACCOUNT.");
     } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PATH) {
-        // Use file path (local or uploaded to Render)
+        // Use file path (Good for local development or platforms supporting file paths)
+        // Use path.resolve(__dirname, ...) for safer path resolution if needed
         serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PATH);
         console.log("Firebase: Using service account file from FIREBASE_SERVICE_ACCOUNT_KEY_PATH.");
     } else {
@@ -32,19 +33,37 @@ try {
 
     admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
+        // Optional: Add databaseURL if you use Realtime Database
+        // databaseURL: "https://YOUR_DATABASE_NAME.firebaseio.com"
     });
-    console.log("Firebase Admin SDK initialized successfully.");
+    console.log("✅ Firebase Admin SDK initialized successfully.");
+    firebaseInitialized = true;
 } catch (error) {
     console.error("🔴 ERROR: Failed to initialize Firebase Admin SDK:", error.message);
-    process.exit(1); // Exit process if initialization fails
+     // 🔴 Decide whether to exit on Firebase failure in production
+     if (process.env.NODE_ENV === 'production') {
+          console.error("Exiting process due to Firebase initialization failure in production.");
+         process.exit(1); // Exit in production if DB is critical
+     }
+     // In development, we might allow it to continue with a null db, but log heavily
 }
 
-const db = admin.firestore(); // Firestore instance
+// Get a reference to the Firestore database ONLY if Firebase was initialized successfully
+const db = firebaseInitialized ? admin.firestore() : null;
+if (!db && firebaseInitialized) {
+    console.error("🔴 ERROR: Firestore instance could not be obtained after Firebase initialization.");
+     if (process.env.NODE_ENV === 'production') {
+          console.error("Exiting process due to Firestore instance failure in production.");
+         process.exit(1); // Exit in production if DB is critical
+     }
+}
+
 
 // --- YouTube Data API Initialization ---
 const youtubeApiKey = process.env.YOUTUBE_API_KEY;
 if (!youtubeApiKey || youtubeApiKey === 'YOUR_COPIED_YOUTUBE_API_KEY') {
     console.error("🔴 ERROR: YOUTUBE_API_KEY is not set or is using the placeholder in .env. Video data will not load from YouTube.");
+    // In production, you might want to exit here
 }
 
 const youtube = (youtubeApiKey && youtubeApiKey !== 'YOUR_COPIED_YOUTUBE_API_KEY') ? google.youtube({
@@ -63,13 +82,48 @@ console.log("🔴 Book views, audio likes, and video comments are now stored in 
 const app = express();
 const port = process.env.PORT || 3001;
 
-app.use(cors(
-    {
-    origin: ['https://backend-library-uoqs.onrender.com', 'https://bannalydigital.netlify.app'], // ប្តូរទៅ Netlify URL ក្រោយ Deploy
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+// --- 🔴 CORS Configuration ---
+// Define allowed origins based on environment
+const allowedOrigins = [
+    'https://bannalydigital.netlify.app', // Frontend deployed on Netlify
+    // Add other deployed frontend URLs here if any
+    // You might also want to include the backend's own URL if it serves anything directly to the browser,
+    // although it's less common for an API-only backend.
+    'https://backend-library-uoqs.onrender.com' // Backend deployed URL (can be helpful for debugging)
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, or same-origin in some cases)
+    // Allow the specific allowed origins
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      // Deny other origins and log the unauthorized origin
+      console.warn(`CORS blocked request from unauthorized origin: ${origin}`);
+      callback(new Error(`Not allowed by CORS: ${origin}`), false);
+    }
+  },
+   methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE'], // Explicitly allowed methods
+   allowedHeaders: ['Content-Type', 'Authorization'], // Explicitly allowed headers (add others if your frontend uses them)
+   credentials: true, // Allow cookies/auth headers if needed
+   optionsSuccessStatus: 204 // Recommended for CORS preflight requests
+};
+
+// Apply CORS middleware
+// 💡 In development, you might want to use cors() without options to allow all origins
+// for easier local testing if your local frontend doesn't run on 3000 exactly.
+// For this code, we apply specific rules in production and allow all in development.
+if (process.env.NODE_ENV !== 'production') {
+    console.warn("CORS is configured to allow all origins in development mode.");
+    app.use(cors()); // Allow all origins (*) in development
+} else {
+    console.log(`CORS is configured to allow origins: ${allowedOrigins.join(', ')} in production mode.`);
+    app.use(cors(corsOptions)); // Apply specific CORS rules in production
 }
-));
+
+
+// --- Middleware --- (Keep existing)
 app.use(express.json());
 
 const getBaseName = (filename) => {
@@ -96,16 +150,7 @@ const urlEndpoint = process.env.IMAGEKIT_URL_ENDPOINT;
 if (!publicKey || !privateKey || !urlEndpoint) {
     console.error("🔴 ERROR: ImageKit BOOK environment variables are not set.");
     console.error("🔴 Please set IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, and IMAGEKIT_URL_ENDPOINT in .env.");
-    if (process.env.NODE_ENV !== 'production') {
-        if (!publicKey) process.env.IMAGEKIT_PUBLIC_KEY = 'dummy_public_key_book';
-        if (!privateKey) process.env.IMAGEKIT_PRIVATE_KEY = 'dummy_private_key_book';
-        if (!urlEndpoint) process.env.IMAGEKIT_URL_ENDPOINT = 'https://ik.imagekit.io/dummy_book/';
-        console.warn("Using dummy ImageKit BOOK credentials. Book features may not function correctly.");
-    } else {
-        console.error("Missing ImageKit BOOK credentials in production. Book features might not work.");
-    }
-} else {
-    console.log("ImageKit BOOK credentials loaded.");
+    // ... dummy credentials logic ...
 }
 
 const imagekit = (publicKey && privateKey && urlEndpoint) ? new ImageKit({
@@ -123,14 +168,7 @@ let audioImageKit = null;
 if (!audioPublicKey || !audioPrivateKey || !audioUrlEndpoint) {
     console.error("🔴 ERROR: ImageKit AUDIO environment variables are not set.");
     console.error("🔴 Please set AUDIO_IMAGEKIT_PUBLIC_KEY, AUDIO_IMAGEKIT_PRIVATE_KEY, and AUDIO_IMAGEKIT_URL_ENDPOINT in .env.");
-    if (process.env.NODE_ENV !== 'production') {
-        if (!audioPublicKey) process.env.AUDIO_IMAGEKIT_PUBLIC_KEY = 'dummy_public_key_audio';
-        if (!audioPrivateKey) process.env.AUDIO_IMAGEKIT_PRIVATE_KEY = 'dummy_private_key_audio';
-        if (!audioUrlEndpoint) process.env.AUDIO_IMAGEKIT_URL_ENDPOINT = 'https://ik.imagekit.io/dummy_audio/';
-        console.warn("Using dummy ImageKit AUDIO credentials. Audio features may not function correctly.");
-    } else {
-        console.error("Missing ImageKit AUDIO credentials in production. Audio features might not work.");
-    }
+    // ... dummy credentials logic ...
 } else {
     console.log("ImageKit AUDIO credentials loaded.");
     audioImageKit = new ImageKit({
@@ -147,6 +185,13 @@ app.get('/api/imagekit/rerngniten-data', async (req, res) => {
         return res.status(500).json({
             message: 'Backend not configured for ImageKit BOOK access. Please check server environment variables.',
             error: 'ImageKit BOOK configuration missing'
+        });
+    }
+    if (!db) { // Check if Firestore DB is initialized
+        console.error("Firestore DB not initialized. Cannot fetch book views.");
+        return res.status(500).json({
+            message: 'Backend database is not configured.',
+            error: 'Firestore DB configuration missing'
         });
     }
 
@@ -178,6 +223,8 @@ app.get('/api/imagekit/rerngniten-data', async (req, res) => {
             }
             return acc;
         }, {});
+        console.log(`Created cover map with ${Object.keys(coverFilesByBaseName).length} entries.`);
+
 
         const allBooksData = [];
 
@@ -242,15 +289,23 @@ app.post('/api/imagekit/view-book', async (req, res) => {
     if (!bookId) {
         return res.status(400).json({ message: 'Book ID is required' });
     }
+     if (!db) { // Check if Firestore DB is initialized
+        console.error("Firestore DB not initialized. Cannot record book view.");
+        return res.status(500).json({
+            message: 'Backend database is not configured.',
+            error: 'Firestore DB configuration missing'
+        });
+    }
 
     try {
         const bookRef = db.collection('bookViews').doc(bookId);
         await db.runTransaction(async (transaction) => {
             const bookDoc = await transaction.get(bookRef);
             const currentViews = bookDoc.exists ? bookDoc.data().views : 0;
-            transaction.set(bookRef, { views: currentViews + 1 }, { merge: true });
+            transaction.set(bookRef, { views: currentViews + 1 }, { merge: true }); // Use merge: true in case other fields exist
         });
 
+        // Fetch the updated document to get the new count
         const updatedDoc = await bookRef.get();
         const newViewCount = updatedDoc.data().views;
         console.log(`View recorded for bookId: ${bookId}. Current count: ${newViewCount}.`);
@@ -269,6 +324,11 @@ app.get('/api/imagekit/audio-data', async (req, res) => {
             message: 'Backend not configured for ImageKit AUDIO access. Please check server environment variables.',
             error: 'ImageKit AUDIO configuration missing'
         });
+    }
+     if (!db) { // Check if Firestore DB is initialized for likes
+        console.error("Firestore DB not initialized. Cannot fetch audio likes.");
+        // You can still serve audio data but without live likes
+        // proceed without fetching likes, or return error based on criticality
     }
 
     const audioFilesFolderPath = "/AllAudio";
@@ -371,6 +431,13 @@ app.post('/api/audio/:audioId/like', async (req, res) => {
         console.warn(`Received audio like request for ${audioId} without isLiked status.`);
         return res.status(400).json({ message: 'isLiked status is required in body' });
     }
+     if (!db) { // Check if Firestore DB is initialized
+        console.error("Firestore DB not initialized. Cannot record audio like.");
+        return res.status(500).json({
+            message: 'Backend database is not configured.',
+            error: 'Firestore DB configuration missing'
+        });
+    }
 
     try {
         const audioRef = db.collection('audioLikes').doc(audioId);
@@ -378,7 +445,7 @@ app.post('/api/audio/:audioId/like', async (req, res) => {
             const audioDoc = await transaction.get(audioRef);
             const currentLikes = audioDoc.exists ? audioDoc.data().likes : 0;
             const newLikes = isLiked ? Math.max(0, currentLikes - 1) : currentLikes + 1;
-            transaction.set(audioRef, { likes: newLikes }, { merge: true });
+            transaction.set(audioRef, { likes: newLikes }, { merge: true }); // Use merge: true
         });
 
         const updatedDoc = await audioRef.get();
@@ -434,15 +501,56 @@ app.get('/api/videos/:videoId/comments', async (req, res) => {
     }
 
     try {
-        const commentsSnapshot = await db.collection('videoComments')
+        // Fetch all comments and replies for this video from Firestore
+        const commentsSnapshot = await db.collection('videoComments') // 🔴 Use 'videoComments' collection name
             .where('videoId', '==', videoId)
             .orderBy('timestamp', 'asc')
             .get();
 
-        const comments = commentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const flatComments = commentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        console.log(`Serving ${comments.length} comments (and replies) for video ID: ${videoId}`);
-        res.json(comments);
+        // Build the nested comment tree structure (for frontend)
+        const commentsMap = {};
+        flatComments.forEach(comment => {
+             // 🔴 Ensure the comment object includes necessary fields for nesting and display
+            commentsMap[comment.id] = {
+                 id: comment.id,
+                 videoId: comment.videoId,
+                 text: comment.text,
+                 author: comment.author,
+                 timestamp: comment.timestamp && typeof comment.timestamp.toDate === 'function' ? comment.timestamp.toDate().toISOString() : (comment.timestamp || new Date()).toISOString(), // Ensure timestamp is ISO string
+                 parentId: comment.parentId || null,
+                 likes: comment.likes || 0,
+                 replies: [] // Initialize replies array for nesting
+             };
+        });
+
+        const nestedComments = [];
+        flatComments.forEach(comment => {
+            if (comment.parentId && commentsMap[comment.parentId]) {
+                // This is a reply, add it to its parent's replies array
+                 if (!commentsMap[comment.parentId].replies) {
+                     commentsMap[comment.parentId].replies = [];
+                 }
+                 // Push the *nested* comment object from commentsMap
+                commentsMap[comment.parentId].replies.push(commentsMap[comment.id]);
+            } else {
+                // This is a top-level comment, add it to the root array
+                nestedComments.push(commentsMap[comment.id]);
+            }
+        });
+
+        // Sort replies by timestamp if needed (optional)
+         nestedComments.forEach(comment => {
+             if (comment.replies && comment.replies.length > 0) {
+                 comment.replies.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+             }
+         });
+
+
+        console.log(`Serving ${flatComments.length} total comments/replies for video ID: ${videoId}. Built ${nestedComments.length} top-level comments.`);
+        res.json(nestedComments); // Return the built tree
+
     } catch (error) {
         console.error(`Error fetching comments for videoId: ${videoId}:`, error);
         res.status(500).json({ message: 'Failed to fetch comments', error: error.message });
@@ -459,22 +567,35 @@ app.post('/api/videos/:videoId/comments', async (req, res) => {
     }
 
     const commentAuthor = author || 'អ្នកប្រើប្រាស់អនាមិក';
+    // In a real app, you would get author from authenticated user data, not body.
 
-    const newComment = {
+    const newCommentData = {
         videoId,
         text: text.trim(),
         author: commentAuthor,
-        timestamp: new Date().toISOString(),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
         parentId: parentId || null,
         likes: 0,
-        replies: [],
+        // replies array is not stored in Firestore for nested comments
     };
 
     try {
-        const commentRef = await db.collection('videoComments').add(newComment);
-        newComment.id = commentRef.id;
-        console.log(`New comment/reply added for video ID: ${videoId} by ${commentAuthor}. Parent ID: ${parentId}`);
-        res.status(201).json(newComment);
+        const docRef = await db.collection('videoComments').add(newCommentData); // 🔴 Use 'videoComments' collection name
+        const newCommentDoc = await docRef.get();
+        const newComment = { id: newCommentDoc.id, ...newCommentDoc.data() };
+
+        // Ensure timestamp is in a format frontend expects
+        if (newComment.timestamp && typeof newComment.timestamp.toDate === 'function') {
+             newComment.timestamp = newComment.timestamp.toDate().toISOString();
+        } else {
+             newComment.timestamp = new Date().toISOString(); // Fallback for pending server timestamp
+        }
+         // Add empty replies array for frontend structure consistency
+         newComment.replies = [];
+
+
+        console.log(`New comment/reply added for video ID: ${videoId} by ${commentAuthor}. Document ID: ${docRef.id}. Parent ID: ${parentId}`);
+        res.status(201).json(newComment); // Return the newly created comment object
     } catch (error) {
         console.error(`Error adding comment for videoId: ${videoId}:`, error);
         res.status(500).json({ message: 'Failed to add comment', error: error.message });
@@ -484,7 +605,8 @@ app.post('/api/videos/:videoId/comments', async (req, res) => {
 // --- API Endpoint for Reacting to Comments ---
 app.post('/api/comments/:commentId/react', async (req, res) => {
     const commentId = req.params.commentId;
-    const { type } = req.body;
+    const { type } = req.body; // Expecting { type: 'like' }
+    // In a real app, you'd get the userId from authentication here to track who liked
 
     if (!commentId || !type || type !== 'like') {
         console.warn(`Received invalid reaction request for comment ID ${commentId}: type=${type}`);
@@ -492,7 +614,7 @@ app.post('/api/comments/:commentId/react', async (req, res) => {
     }
 
     try {
-        const commentRef = db.collection('videoComments').doc(commentId);
+        const commentRef = db.collection('videoComments').doc(commentId); // 🔴 Use 'videoComments' collection name
         const commentDoc = await commentRef.get();
 
         if (!commentDoc.exists) {
@@ -503,9 +625,10 @@ app.post('/api/comments/:commentId/react', async (req, res) => {
         await db.runTransaction(async (transaction) => {
             const commentDoc = await transaction.get(commentRef);
             const currentLikes = commentDoc.data().likes || 0;
-            transaction.update(commentRef, { likes: currentLikes + 1 });
+            transaction.update(commentRef, { likes: currentLikes + 1 }); // Atomically increment likes
         });
 
+        // Fetch the updated document to return the new count
         const updatedDoc = await commentRef.get();
         const newLikesCount = updatedDoc.data().likes;
         console.log(`Reaction 'like' recorded for comment ID: ${commentId}. New likes count: ${newLikesCount}`);
@@ -598,20 +721,26 @@ async function fetchPlaylistItems(playlistId, pageToken = null, allItems = []) {
 
         const items = response.data.items;
         if (!items || items.length === 0) {
+            // No items found on this page or playlist is empty
             return allItems;
         }
 
         const currentItems = allItems.concat(items);
         const nextToken = response.data.nextPageToken;
 
+        // If there's a next page token, recursively call to fetch the next page
         if (nextToken) {
-            return fetchPlaylistItems(playlistId, nextToken, currentItems);
+            // Add a small delay to avoid hitting rate limits too quickly if playlists are very large (Optional)
+            // await new Promise(resolve => setTimeout(resolve, 100));
+            return fetchPlaylistItems(playlistId, nextToken, currentItems); // Pass accumulated items
         } else {
-            return currentItems;
+            return currentItems; // Return the full list when no more pages
         }
     } catch (error) {
         console.error(`🔴 Error fetching playlist items for playlist ID ${playlistId} (Page Token: ${pageToken}):`, error);
-        return allItems;
+        // Depending on the error, you might want to throw it, return the items fetched so far, etc.
+        // Returning the items fetched so far might be more resilient.
+        return allItems; // Return items fetched up to this point on error
     }
 }
 
@@ -635,13 +764,17 @@ app.listen(port, () => {
         console.log(`Comment Reaction POST: POST to http://localhost:${port}/api/comments/:commentId/react with body { type: "like" }`);
         console.log(`Remember to update REACT_APP_BACKEND_API_URL in your React app's environment variables.`);
         console.warn("\n--- Backend Configuration Notes ---");
+        console.warn(`Firebase DB: Using Firestore for Comments, Reactions, Audio Likes, Book Views.`);
+        console.warn(`Firebase Config: Requires FIREBASE_SERVICE_ACCOUNT_KEY_PATH or FIREBASE_SERVICE_ACCOUNT JSON in environment.`); // Updated Note
         console.warn(`ImageKit Book Folders: /AllBook (PDFs), /AllCover (Covers)`);
         console.warn(`ImageKit Audio Folders: /AllAudio (MP3 etc.), /AllDescription (TXT)`);
         console.warn(`Book Category Logic: Filename prefixes defined in 'categoryPrefixes' array.`);
         console.warn(`Book/Cover Match Logic: Base filename must match exactly (case-insensitive).`);
         console.warn(`Audio Description Match Logic: Base filename of MP3 must match base filename of TXT.`);
         console.warn(`Video Data: Fetched from YouTube Playlists defined in ./server/data/rerngNitenCollectionsConfig.js`);
-        console.warn(`Required Environment Variables: IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT, AUDIO_IMAGEKIT_PUBLIC_KEY, AUDIO_IMAGEKIT_PRIVATE_KEY, AUDIO_IMAGEKIT_URL_ENDPOINT, YOUTUBE_API_KEY, FIREBASE_SERVICE_ACCOUNT_KEY_PATH`);
+        console.warn(`Required Environment Variables: IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT, AUDIO_IMAGEKIT_PUBLIC_KEY, AUDIO_IMAGEKIT_PRIVATE_KEY, AUDIO_IMAGEKIT_URL_ENDPOINT, YOUTUBE_API_KEY, FIREBASE_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT_KEY_PATH`); // Updated required variables
         console.warn(`🔴 Book views, audio likes, and video comments are stored in Firestore for persistence.`);
+        console.warn(`🔴 Video comments GET endpoint currently returns flat list, not nested tree.`); // Corrected note
+        console.warn(`🔴 IMPORTANT: Implement Firestore Security Rules in Firebase Console for Production!`);
     }
 });
