@@ -14,20 +14,29 @@ const admin = require('firebase-admin'); // Add Firebase Admin SDK
 const { collectionsConfig } = require('./server/data/rerngNitenCollectionsConfig'); // Video Collections Config
 
 // --- Firebase Admin SDK Initialization ---
-const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PATH;
+const admin = require('firebase-admin');
 
-if (!serviceAccountPath) {
-    console.error("🔴 ERROR: FIREBASE_SERVICE_ACCOUNT_KEY_PATH is not set in .env.");
-} else {
-    try {
-        const serviceAccount = require(serviceAccountPath);
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount),
-        });
-        console.log("Firebase Admin SDK initialized successfully.");
-    } catch (error) {
-        console.error("🔴 ERROR: Failed to initialize Firebase Admin SDK:", error);
+let serviceAccount;
+try {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        // Use JSON content from environment variable
+        serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        console.log("Firebase: Using service account JSON from FIREBASE_SERVICE_ACCOUNT.");
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PATH) {
+        // Use file path (local or uploaded to Render)
+        serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PATH);
+        console.log("Firebase: Using service account file from FIREBASE_SERVICE_ACCOUNT_KEY_PATH.");
+    } else {
+        throw new Error('FIREBASE_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT_KEY_PATH must be set in environment variables.');
     }
+
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+    });
+    console.log("Firebase Admin SDK initialized successfully.");
+} catch (error) {
+    console.error("🔴 ERROR: Failed to initialize Firebase Admin SDK:", error.message);
+    process.exit(1); // Exit process if initialization fails
 }
 
 const db = admin.firestore(); // Firestore instance
