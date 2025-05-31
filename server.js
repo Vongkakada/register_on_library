@@ -9,7 +9,7 @@ const ImageKit = require('imagekit'); // Used for Book ImageKit
 const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 const fetch = require('node-fetch'); // Import node-fetch to fetch content from TXT URLs
-const admin = require('firebase-admin'); // Add Firebase Admin SDK
+
 
 const { collectionsConfig } = require('./server/data/rerngNitenCollectionsConfig'); // Video Collections Config
 
