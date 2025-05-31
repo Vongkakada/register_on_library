@@ -65,7 +65,7 @@ const port = process.env.PORT || 3001;
 
 app.use(cors(
     {
-    origin: ['http://localhost:3000', 'https://bannalydigital.netlify.app'], // ប្តូរទៅ Netlify URL ក្រោយ Deploy
+    origin: ['https://backend-library-uoqs.onrender.com', 'https://bannalydigital.netlify.app'], // ប្តូរទៅ Netlify URL ក្រោយ Deploy
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }
