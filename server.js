@@ -10,7 +10,6 @@ const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 const fetch = require('node-fetch'); // Import node-fetch to fetch content from TXT URLs
 
-
 const { collectionsConfig } = require('./server/data/rerngNitenCollectionsConfig'); // Video Collections Config
 
 // --- Firebase Admin SDK Initialization ---
@@ -63,13 +62,11 @@ console.log("🔴 Book views, audio likes, and video comments are now stored in 
 const app = express();
 const port = process.env.PORT || 3001;
 
-app.use(cors(
-    {
+app.use(cors({
     origin: ['http://localhost:3000', 'https://bannalydigital.netlify.app/'], // ប្តូរទៅ Netlify URL ក្រោយ Deploy
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization']
-}
-));
+}));
 app.use(express.json());
 
 const getBaseName = (filename) => {
@@ -641,7 +638,7 @@ app.listen(port, () => {
         console.warn(`Book/Cover Match Logic: Base filename must match exactly (case-insensitive).`);
         console.warn(`Audio Description Match Logic: Base filename of MP3 must match base filename of TXT.`);
         console.warn(`Video Data: Fetched from YouTube Playlists defined in ./server/data/rerngNitenCollectionsConfig.js`);
-        console.warn(`Required Environment Variables: IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT, AUDIO_IMAGEKIT_PUBLIC_KEY, AUDIO_IMAGEKIT_PRIVATE_KEY, AUDIO_IMAGEKIT_URL_ENDPOINT, YOUTUBE_API_KEY, FIREBASE_SERVICE_ACCOUNT_KEY_PATH`);
+        console.warn(`Required Environment Variables: IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT, AUDIO_IMAGEKIT_PUBLIC_KEY, AUDIO_IMAGEKIT_PRIVATE_KEY, AUDIO_IMAGEKIT_URL_ENDPOINT, YOUTUBE_API_KEY, FIREBASE_SERVICE_ACCOUNT_KEY_PATH or FIREBASE_SERVICE_ACCOUNT`);
         console.warn(`🔴 Book views, audio likes, and video comments are stored in Firestore for persistence.`);
     }
 });
