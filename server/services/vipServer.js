@@ -104,6 +104,7 @@ if (!vipIdPublicKey || !vipIdPrivateKey || !vipIdUrlEndpoint) {
 
 // --- CORS Configuration ---
 const allowedOrigins = [
+    "https://register-on-library.onrender.com", // Your deployed vip registration frontend
     'https://bannalydigital.netlify.app', // Your deployed frontend
     'http://localhost:3000'               // Your local frontend development server
 ];
