@@ -1,3 +1,17 @@
+# Dependency directories
 node_modules/
+
+# Environment variables file
 .env
+
+# Firebase service account key file
 firebase-service-account-key.json
+
+# Files ដែលមិនចាំបាច់
+server copy.js
+server copy 2.js
+
+# Log files
+*.log
+npm-debug.log*
+# ... (entries ផ្សេងទៀតពីការណែនាំមុន)

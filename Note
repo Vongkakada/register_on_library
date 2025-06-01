@@ -1,2 +1,22 @@
 node server.js
 npm run start
+
+node server/services/vipServer.js
+
+
+git add server.js package.json
+git add server\data\rerngNitenCollectionsConfig.js
+git commit -m "Update files"
+
+git push origin main
+
+Test UI
+node server copy 2.js
+
+
+
+បើសិនជាត្រូវថែមសៀវភៅឬសម្លេងថ្មីត្រូវបន្ថែមទៅក្នុង server.js 
+// --- 🔴 TEMPORARY: Data Migration Script (Run this ONCE manually) ---
+// You would typically run this script separately, not within your main server file.
+// This is for demonstration purposes only.
+/*

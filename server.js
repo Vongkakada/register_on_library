@@ -19,9 +19,9 @@ let serviceAccount;
 let firebaseInitialized = false; // Flag to track successful Firebase init
 try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        // Use JSON content from environment variable (Good for hosting platforms)
+        // Use JSON content from environment variable (Good for hosting platforms like Render)
         serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-        console.log("Firebase: Using service account JSON from FIREBASE_SERVICE_ACCOUNT.");
+        console.log("Firebase: Using service account JSON from FIREBASE_SERVICE_ACCOUNT environment variable.");
     } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY_PATH) {
         // Use file path (Good for local development or platforms supporting file paths)
         // Use path.resolve(__dirname, ...) for safer path resolution if needed
@@ -56,6 +56,8 @@ if (!db && firebaseInitialized) {
           console.error("Exiting process due to Firestore instance failure in production.");
          process.exit(1); // Exit in production if DB is critical
      }
+} else if (db) {
+    console.log("✅ Firestore DB instance obtained.");
 }
 
 
@@ -89,7 +91,7 @@ const allowedOrigins = [
     // Add other deployed frontend URLs here if any
     // You might also want to include the backend's own URL if it serves anything directly to the browser,
     // although it's less common for an API-only backend.
-    'https://backend-library-uoqs.onrender.com' // Backend deployed URL (can be helpful for debugging)
+    // 'https://backend-library-uoqs.onrender.com' // Backend deployed URL (can be helpful for debugging)
 ];
 
 const corsOptions = {
@@ -115,7 +117,7 @@ const corsOptions = {
 // for easier local testing if your local frontend doesn't run on 3000 exactly.
 // For this code, we apply specific rules in production and allow all in development.
 if (process.env.NODE_ENV !== 'production') {
-    console.warn("CORS is configured to allow all origins in development mode.");
+    console.warn("CORS is configured to allow all origins (*) in development mode.");
     app.use(cors()); // Allow all origins (*) in development
 } else {
     console.log(`CORS is configured to allow origins: ${allowedOrigins.join(', ')} in production mode.`);
@@ -178,118 +180,214 @@ if (!audioPublicKey || !audioPrivateKey || !audioUrlEndpoint) {
     });
 }
 
-// --- API Endpoint for Listing ImageKit Data (Books) ---
-app.get('/api/imagekit/rerngniten-data', async (req, res) => {
-    if (!imagekit) {
-        console.error("ImageKit BOOK not initialized. Cannot fetch book list.");
-        return res.status(500).json({
-            message: 'Backend not configured for ImageKit BOOK access. Please check server environment variables.',
-            error: 'ImageKit BOOK configuration missing'
-        });
+// --- 🔴 TEMPORARY: Data Migration Script (Run this ONCE manually) ---
+// You would typically run this script separately, not within your main server file.
+// This is for demonstration purposes only.
+/*
+async function migrateDataToFirestore() {
+    if (!db) {
+        console.error("Firestore DB not initialized. Skipping data migration.");
+        return;
     }
-    if (!db) { // Check if Firestore DB is initialized
-        console.error("Firestore DB not initialized. Cannot fetch book views.");
+    if (!imagekit || !audioImageKit) {
+         console.error("ImageKit clients not initialized. Cannot migrate data.");
+         return;
+    }
+
+    console.log("🔴 Starting data migration from ImageKit to Firestore...");
+
+    // --- Migrate Book Data ---
+    const allBooksFolderPath = "/AllBook";
+    const allCoversFolderPath = "/AllCover";
+    try {
+        const pdfFiles = await imagekit.listFiles({ path: allBooksFolderPath, fileType: "non-image", extensions: ["pdf"], limit: 1000 });
+        const coverFiles = await imagekit.listFiles({ path: allCoversFolderPath, fileType: "image", limit: 1000 });
+        const coverFilesByBaseName = coverFiles.reduce((acc, file) => {
+            const baseName = getBaseName(file.name).trim().toLowerCase();
+            if (baseName) acc[baseName] = file;
+            return acc;
+        }, {});
+
+        for (const pdfFile of pdfFiles) {
+            const pdfBaseName = getBaseName(pdfFile.name).trim();
+             if (!pdfBaseName) continue;
+
+            let category = defaultCategory;
+            const lowerCasePdfBaseName = pdfBaseName.toLowerCase();
+            for (const catPrefix of categoryPrefixes) {
+                 if (lowerCasePdfBaseName.startsWith(catPrefix.prefix.toLowerCase())) {
+                     category = catPrefix.category;
+                     break;
+                 }
+            }
+            const matchingCoverFile = coverFilesByBaseName[lowerCasePdfBaseName];
+            const coverImageUrl = matchingCoverFile ? matchingCoverFile.url : null;
+
+            const bookItemData = {
+                title: pdfBaseName, // Use original case for title
+                pdfUrl: pdfFile.url,
+                coverImageUrl: coverImageUrl,
+                category: category,
+                author: 'មិនមានព័ទ្ធិមាន', // You might want to add author logic here
+                views: 0, // Start views at 0 or migrate from old source if possible
+                // Add other metadata fields as needed
+            };
+
+            // Use ImageKit FileId as document ID in Firestore for consistency
+            await db.collection('bookItems').doc(pdfFile.fileId).set(bookItemData, { merge: true });
+        }
+        console.log(`✅ Book data migration complete. Migrated ${pdfFiles.length} books to Firestore.`);
+
+    } catch (error) {
+        console.error("🔴 Book data migration FAILED:", error);
+    }
+
+
+    // --- Migrate Audio Data ---
+    const audioFilesFolderPath = "/AllAudio";
+    const descriptionFilesFolderPath = "/AllDescription";
+     // const audioCoversFolderPath = "/AudioCovers"; // Uncomment if you have audio covers
+
+    try {
+        const audioFiles = await audioImageKit.listFiles({ path: audioFilesFolderPath, fileType: "non-image", extensions: ["mp3", "ogg", "wav", "aac"], limit: 1000 });
+        const descriptionFiles = await audioImageKit.listFiles({ path: descriptionFilesFolderPath, fileType: "non-image", extensions: ["txt"], limit: 1000 });
+
+        const descriptionContentMap = {};
+        await Promise.all(descriptionFiles.map(async (descFile) => {
+             const descBaseName = getBaseName(descFile.name).trim().toLowerCase();
+             if (descBaseName) {
+                 try {
+                     const response = await fetch(descFile.url);
+                     if (response.ok) {
+                         descriptionContentMap[descBaseName] = await response.text();
+                     } else {
+                          console.warn(`Failed to fetch content for description file ${descFile.name}: ${response.status}`);
+                          descriptionContentMap[descBaseName] = '';
+                     }
+                 } catch (fetchError) {
+                      console.warn(`Error fetching content for description file ${descFile.name}:`, fetchError);
+                      descriptionContentMap[descBaseName] = '';
+                 }
+             }
+        }));
+
+         // If you have audio covers:
+         // const audioCoverFiles = await audioImageKit.listFiles({...});
+         // const audioCoverFilesByBaseName = audioCoverFiles.reduce(...);
+
+
+        for (const audioFile of audioFiles) {
+            const audioBaseName = getBaseName(audioFile.name).trim();
+             if (!audioBaseName) continue;
+
+            const lowerCaseAudioBaseName = audioBaseName.toLowerCase();
+            const descriptionText = descriptionContentMap[lowerCaseAudioBaseName] || 'មិនមានព័ទ្ធិមានពិស្តារទេ';
+
+             // const audioCoverFile = audioCoverFilesByBaseName[lowerCaseAudioBaseName]; // If fetching covers
+             // const audioCoverImageUrl = audioCoverFile ? audioCoverFile.url : null;
+
+            const audioItemData = {
+                title: audioBaseName, // Use original case for title
+                src: audioFile.url,
+                coverImageUrl: null, // Set to audioCoverImageUrl if fetching covers
+                description: descriptionText,
+                likes: 0, // Start likes at 0 or migrate from old source
+                // Add other metadata fields as needed
+            };
+
+             // Use ImageKit FileId as document ID in Firestore for consistency
+            await db.collection('audioItems').doc(audioFile.fileId).set(audioItemData, { merge: true });
+        }
+        console.log(`✅ Audio data migration complete. Migrated ${audioFiles.length} audio items to Firestore.`);
+
+    } catch (error) {
+        console.error("🔴 Audio data migration FAILED:", error);
+    }
+
+    console.log("🔴 Data migration process finished.");
+}
+// To run the migration: Uncomment the line below, run the server ONCE, then comment it back out.
+   // migrateDataToFirestore().catch(console.error);
+*/
+
+
+// --- API Endpoint for Listing ImageKit Data (Books) ---
+// 🔴 NOW Fetches from Firestore with Pagination
+app.get('/api/imagekit/rerngniten-data', async (req, res) => {
+    if (!db) {
+        console.error("Firestore DB not initialized. Cannot fetch book list.");
         return res.status(500).json({
             message: 'Backend database is not configured.',
             error: 'Firestore DB configuration missing'
         });
     }
 
-    const allBooksFolderPath = "/AllBook";
-    const allCoversFolderPath = "/AllCover";
+    // 🔴 Get pagination parameters from query string
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 16; // Default to 16 items per page
+    const skip = (page - 1) * limit; // Calculate number of items to skip
+
+     // Optional: Get filter parameters if needed (e.g., category)
+     // const categoryFilter = req.query.category;
 
     try {
-        console.log(`Fetching PDF files from: ${allBooksFolderPath} (Book ImageKit)`);
-        const pdfFiles = await imagekit.listFiles({
-            path: allBooksFolderPath,
-            fileType: "non-image",
-            extensions: ["pdf"],
-            limit: 1000
+        console.log(`Fetching book items from Firestore with pagination: Page ${page}, Limit ${limit}`);
+
+        // 🔴 Get total count of items (needed for frontend pagination)
+        const countSnapshot = await db.collection('bookItems').count().get();
+        const totalItems = countSnapshot.data().count;
+        console.log(`Total book items available: ${totalItems}`);
+
+
+        // 🔴 Fetch the paginated data from Firestore
+        let query = db.collection('bookItems');
+         // Optional: Add filter conditions to the query if needed (e.g., query = query.where('category', '==', categoryFilter);)
+        query = query.limit(limit).offset(skip); // Apply limit and offset
+
+        const itemsSnapshot = await query.get();
+
+        const paginatedBookData = itemsSnapshot.docs.map(doc => {
+             const data = doc.data();
+             return {
+                 id: doc.id, // Firestore Document ID
+                 title: data.title,
+                 pdfUrl: data.pdfUrl,
+                 coverImageUrl: data.coverImageUrl,
+                 category: data.category,
+                 author: data.author,
+                 views: data.views || 0, // Ensure views defaults to 0
+                 // Add other fields as needed
+             };
         });
-        console.log(`Found ${pdfFiles.length} PDF files in ${allBooksFolderPath}`);
 
-        console.log(`Fetching cover image files from: ${allCoversFolderPath} (Book ImageKit)`);
-        const coverFiles = await imagekit.listFiles({
-            path: allCoversFolderPath,
-            fileType: "image",
-            limit: 1000
+        console.log(`Successfully fetched ${paginatedBookData.length} book items for page ${page}.`);
+        res.json({
+             items: paginatedBookData, // Array of items for the current page
+             totalItems: totalItems, // Total number of items across all pages
+             totalPages: Math.ceil(totalItems / limit), // Calculate total pages
+             currentPage: page, // Return current page number
+             itemsPerPage: limit // Return items per page
         });
-        console.log(`Found ${coverFiles.length} cover image files in ${allCoversFolderPath}`);
 
-        const coverFilesByBaseName = coverFiles.reduce((acc, file) => {
-            const baseName = getBaseName(file.name).trim().toLowerCase();
-            if (baseName) {
-                acc[baseName] = file;
-            }
-            return acc;
-        }, {});
-        console.log(`Created cover map with ${Object.keys(coverFilesByBaseName).length} entries.`);
-
-
-        const allBooksData = [];
-
-        // Fetch all view counts in one query
-        const bookViewsSnapshot = await db.collection('bookViews').get();
-        const viewCountsMap = bookViewsSnapshot.docs.reduce((acc, doc) => {
-            acc[doc.id] = doc.data().views || 0;
-            return acc;
-        }, {});
-
-        for (const pdfFile of pdfFiles) {
-            const pdfBaseName = getBaseName(pdfFile.name).trim();
-            const uniqueId = pdfFile.fileId;
-
-            if (!pdfBaseName) {
-                console.warn(`Skipping processing of a PDF file with empty name at path: ${pdfFile.filePath}`);
-                continue;
-            }
-
-            let category = defaultCategory;
-            const lowerCasePdfBaseName = pdfBaseName.toLowerCase();
-            for (const catPrefix of categoryPrefixes) {
-                if (lowerCasePdfBaseName.startsWith(catPrefix.prefix.toLowerCase())) {
-                    category = catPrefix.category;
-                    break;
-                }
-            }
-
-            const lowerCasePdfBaseNameForCoverLookup = pdfBaseName.toLowerCase();
-            const matchingCoverFile = coverFilesByBaseName[lowerCasePdfBaseNameForCoverLookup];
-            const coverImageUrl = matchingCoverFile ? matchingCoverFile.url : null;
-
-            const views = viewCountsMap[uniqueId] || 0;
-
-            allBooksData.push({
-                id: uniqueId,
-                pdfUrl: pdfFile.url,
-                coverImageUrl: coverImageUrl,
-                title: pdfBaseName,
-                category: category,
-                author: 'មិនមានព័ទ្ធិមាន',
-                views: views,
-            });
-        }
-        console.log(`Successfully processed data. Total found ${allBooksData.length} book entries.`);
-        res.json(allBooksData);
     } catch (error) {
-        console.error("Error fetching book list from ImageKit BOOK:", error);
+        console.error("Error fetching paginated book list from Firestore:", error);
         if (process.env.NODE_ENV !== 'production') {
-            console.error("Detailed ImageKit BOOK Error:", error);
+            console.error("Detailed Error:", error);
         }
         res.status(500).json({
-            message: 'Failed to fetch book list from ImageKit',
+            message: 'Failed to fetch book list from database',
             error: process.env.NODE_ENV !== 'production' ? error.message : 'Internal Server Error'
         });
     }
 });
 
-// --- API Endpoint for Recording Book Views ---
+// --- API Endpoint for Recording Book Views (Update Firestore) ---
 app.post('/api/imagekit/view-book', async (req, res) => {
     const bookId = req.body.bookId;
     if (!bookId) {
         return res.status(400).json({ message: 'Book ID is required' });
     }
-     if (!db) { // Check if Firestore DB is initialized
+    if (!db) { // Check if Firestore DB is initialized
         console.error("Firestore DB not initialized. Cannot record book view.");
         return res.status(500).json({
             message: 'Backend database is not configured.',
@@ -298,128 +396,100 @@ app.post('/api/imagekit/view-book', async (req, res) => {
     }
 
     try {
-        const bookRef = db.collection('bookViews').doc(bookId);
+        // 🔴 Update the 'bookItems' collection
+        const bookRef = db.collection('bookItems').doc(bookId);
         await db.runTransaction(async (transaction) => {
             const bookDoc = await transaction.get(bookRef);
-            const currentViews = bookDoc.exists ? bookDoc.data().views : 0;
-            transaction.set(bookRef, { views: currentViews + 1 }, { merge: true }); // Use merge: true in case other fields exist
+            // 🔴 Handle case where book item might not exist
+             if (!bookDoc.exists) {
+                 console.warn(`Attempted to record view for non-existent book ID: ${bookId}`);
+                  throw new Error('Book item not found in database'); // Throw error to transaction
+             }
+            const currentViews = bookDoc.data().views || 0;
+            transaction.update(bookRef, { views: currentViews + 1 }); // Use update for existing document
         });
 
         // Fetch the updated document to get the new count
         const updatedDoc = await bookRef.get();
         const newViewCount = updatedDoc.data().views;
-        console.log(`View recorded for bookId: ${bookId}. Current count: ${newViewCount}.`);
-        res.json({ message: 'View recorded successfully', bookId: bookId, newViewCount });
+        console.log(`View recorded for bookId: ${bookId}. New count: ${newViewCount}.`);
+        res.status(200).json({ message: 'View recorded successfully', bookId: bookId, newViewCount });
     } catch (error) {
         console.error(`Error recording view for bookId: ${bookId}:`, error);
+         // 🔴 Handle the 'Book item not found' error separately if needed
+         if (error.message === 'Book item not found in database') {
+             return res.status(404).json({ message: error.message });
+         }
         res.status(500).json({ message: 'Failed to record view', error: error.message });
     }
 });
 
 // --- API Endpoint for Listing ImageKit Data (Audio) ---
+// 🔴 NOW Fetches from Firestore with Pagination
 app.get('/api/imagekit/audio-data', async (req, res) => {
-    if (!audioImageKit) {
-        console.error("ImageKit AUDIO not initialized. Cannot fetch audio list.");
+    if (!db) { // Check if Firestore DB is initialized
+        console.error("Firestore DB not initialized. Cannot fetch audio list.");
         return res.status(500).json({
-            message: 'Backend not configured for ImageKit AUDIO access. Please check server environment variables.',
-            error: 'ImageKit AUDIO configuration missing'
+            message: 'Backend database is not configured.',
+            error: 'Firestore DB configuration missing'
         });
     }
-     if (!db) { // Check if Firestore DB is initialized for likes
-        console.error("Firestore DB not initialized. Cannot fetch audio likes.");
-        // You can still serve audio data but without live likes
-        // proceed without fetching likes, or return error based on criticality
-    }
 
-    const audioFilesFolderPath = "/AllAudio";
-    const descriptionFilesFolderPath = "/AllDescription";
+     // 🔴 Get pagination parameters from query string
+    const page = parseInt(req.query.page) || 1; // Default to page 1
+    const limit = parseInt(req.query.limit) || 16; // Default to 16 items per page
+    const skip = (page - 1) * limit; // Calculate number of items to skip
 
     try {
-        console.log(`Fetching audio files from ImageKit AUDIO: ${audioFilesFolderPath}`);
-        const audioFiles = await audioImageKit.listFiles({
-            path: audioFilesFolderPath,
-            fileType: "non-image",
-            extensions: ["mp3", "ogg", "wav", "aac"],
-            limit: 1000
+        console.log(`Fetching audio items from Firestore with pagination: Page ${page}, Limit ${limit}`);
+
+        // 🔴 Get total count of items (needed for frontend pagination)
+        const countSnapshot = await db.collection('audioItems').count().get();
+        const totalItems = countSnapshot.data().count;
+        console.log(`Total audio items available: ${totalItems}`);
+
+        // 🔴 Fetch the paginated data from Firestore
+        let query = db.collection('audioItems');
+        query = query.limit(limit).offset(skip); // Apply limit and offset
+
+        const itemsSnapshot = await query.get();
+
+        const paginatedAudioData = itemsSnapshot.docs.map(doc => {
+             const data = doc.data();
+             return {
+                 id: doc.id, // Firestore Document ID
+                 title: data.title,
+                 src: data.src,
+                 coverImageUrl: data.coverImageUrl, // Should come from Firestore now
+                 description: data.description, // Should come from Firestore now
+                 likes: data.likes || 0, // Ensure likes defaults to 0
+                 // Add other fields as needed
+             };
         });
-        console.log(`Found ${audioFiles.length} audio files in ${audioFilesFolderPath}`);
 
-        console.log(`Fetching description files from ImageKit AUDIO: ${descriptionFilesFolderPath}`);
-        const descriptionFiles = await audioImageKit.listFiles({
-            path: descriptionFilesFolderPath,
-            fileType: "non-image",
-            extensions: ["txt"],
-            limit: 1000
+        console.log(`Successfully fetched ${paginatedAudioData.length} audio items for page ${page}.`);
+        res.json({
+             items: paginatedAudioData, // Array of items for the current page
+             totalItems: totalItems, // Total number of items across all pages
+             totalPages: Math.ceil(totalItems / limit), // Calculate total pages
+             currentPage: page, // Return current page number
+             itemsPerPage: limit // Return items per page
         });
-        console.log(`Found ${descriptionFiles.length} description files in ${descriptionFilesFolderPath}`);
 
-        const descriptionContentMap = {};
-        await Promise.all(descriptionFiles.map(async (descFile) => {
-            const descBaseName = getBaseName(descFile.name).trim().toLowerCase();
-            if (descBaseName) {
-                try {
-                    const response = await fetch(descFile.url);
-                    if (!response.ok) {
-                        console.warn(`Failed to fetch content for description file ${descFile.name}: ${response.status} ${response.statusText}`);
-                        descriptionContentMap[descBaseName] = '';
-                        return;
-                    }
-                    const textContent = await response.text();
-                    descriptionContentMap[descBaseName] = textContent;
-                } catch (fetchError) {
-                    console.warn(`Error fetching content for description file ${descFile.name}:`, fetchError);
-                    descriptionContentMap[descBaseName] = '';
-                }
-            }
-        }));
 
-        // Fetch all like counts in one query
-        const audioLikesSnapshot = await db.collection('audioLikes').get();
-        const audioLikesMap = audioLikesSnapshot.docs.reduce((acc, doc) => {
-            acc[doc.id] = doc.data().likes || 0;
-            return acc;
-        }, {});
-
-        const allAudioData = [];
-
-        for (const audioFile of audioFiles) {
-            const audioBaseName = getBaseName(audioFile.name).trim();
-            const uniqueId = audioFile.fileId;
-
-            if (!audioBaseName) {
-                console.warn(`Skipping processing of audio file with empty name at path: ${audioFile.filePath}`);
-                continue;
-            }
-
-            const lowerCaseAudioBaseNameForLookup = audioBaseName.toLowerCase();
-            const descriptionText = descriptionContentMap[lowerCaseAudioBaseNameForLookup] || 'មិនមានព័ទ្ធិមានពិស្តារទេ';
-            const likes = audioLikesMap[uniqueId] || 0;
-
-            allAudioData.push({
-                id: uniqueId,
-                title: audioBaseName,
-                src: audioFile.url,
-                coverImageUrl: null,
-                description: descriptionText,
-                likes: likes,
-            });
-        }
-
-        console.log(`Successfully processed audio data. Total found ${allAudioData.length} audio entries.`);
-        res.json(allAudioData);
     } catch (error) {
-        console.error("Error fetching audio list from ImageKit AUDIO:", error);
+        console.error("Error fetching paginated audio list from Firestore:", error);
         if (process.env.NODE_ENV !== 'production') {
-            console.error("Detailed ImageKit AUDIO Error:", error);
+            console.error("Detailed Error:", error);
         }
         res.status(500).json({
-            message: 'Failed to fetch audio list from ImageKit',
+            message: 'Failed to fetch audio list from database',
             error: process.env.NODE_ENV !== 'production' ? error.message : 'Internal Server Error'
         });
     }
 });
 
-// --- API Endpoint for Liking/Unliking Audio Items ---
+// --- API Endpoint for Liking/Unliking Audio Items (Update Firestore) ---
 app.post('/api/audio/:audioId/like', async (req, res) => {
     const audioId = req.params.audioId;
     const { isLiked } = req.body;
@@ -440,20 +510,31 @@ app.post('/api/audio/:audioId/like', async (req, res) => {
     }
 
     try {
-        const audioRef = db.collection('audioLikes').doc(audioId);
+        // 🔴 Update the 'audioItems' collection
+        const audioRef = db.collection('audioItems').doc(audioId);
         await db.runTransaction(async (transaction) => {
             const audioDoc = await transaction.get(audioRef);
-            const currentLikes = audioDoc.exists ? audioDoc.data().likes : 0;
+            // 🔴 Handle case where audio item might not exist
+            if (!audioDoc.exists) {
+                console.warn(`Attempted to like non-existent audio item ID: ${audioId}`);
+                 throw new Error('Audio item not found in database'); // Throw error to transaction
+            }
+            const currentLikes = audioDoc.data().likes || 0;
             const newLikes = isLiked ? Math.max(0, currentLikes - 1) : currentLikes + 1;
-            transaction.set(audioRef, { likes: newLikes }, { merge: true }); // Use merge: true
+            transaction.update(audioRef, { likes: newLikes }); // Use update for existing document
         });
 
+        // Fetch the updated document to get the new count
         const updatedDoc = await audioRef.get();
         const newLikeCount = updatedDoc.data().likes;
         console.log(`Like action for audio ID ${audioId}. New count: ${newLikeCount}. Action: ${isLiked ? 'Unlike' : 'Like'}`);
         res.status(200).json({ audioId, newLikeCount });
     } catch (error) {
         console.error(`Error updating like for audioId: ${audioId}:`, error);
+         // 🔴 Handle the 'Audio item not found' error separately if needed
+         if (error.message === 'Audio item not found in database') {
+             return res.status(404).json({ message: error.message });
+         }
         res.status(500).json({ message: 'Failed to update like', error: error.message });
     }
 });
@@ -499,44 +580,54 @@ app.get('/api/videos/:videoId/comments', async (req, res) => {
     if (!videoId) {
         return res.status(400).json({ message: 'Video ID is required' });
     }
+     if (!db) { // Check if Firestore DB is initialized
+        console.error("Firestore DB not initialized. Cannot fetch comments.");
+        return res.status(500).json({
+            message: 'Backend database is not configured.',
+            error: 'Firestore DB configuration missing'
+        });
+    }
 
     try {
         // Fetch all comments and replies for this video from Firestore
-        const commentsSnapshot = await db.collection('videoComments') // 🔴 Use 'videoComments' collection name
+        const commentsSnapshot = await db.collection('videoComments')
             .where('videoId', '==', videoId)
             .orderBy('timestamp', 'asc')
             .get();
 
-        const flatComments = commentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const flatComments = commentsSnapshot.docs.map(doc => {
+             const data = doc.data();
+             // 🔴 Ensure all necessary fields are mapped correctly from Firestore data
+             return {
+                 id: doc.id,
+                 videoId: data.videoId,
+                 text: data.text,
+                 author: data.author,
+                 timestamp: data.timestamp && typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate().toISOString() : (data.timestamp || new Date()).toISOString(),
+                 parentId: data.parentId || null,
+                 likes: data.likes || 0,
+                 // Add other fields if they exist in Firestore and needed by frontend
+             };
+        });
 
         // Build the nested comment tree structure (for frontend)
         const commentsMap = {};
         flatComments.forEach(comment => {
-             // 🔴 Ensure the comment object includes necessary fields for nesting and display
-            commentsMap[comment.id] = {
-                 id: comment.id,
-                 videoId: comment.videoId,
-                 text: comment.text,
-                 author: comment.author,
-                 timestamp: comment.timestamp && typeof comment.timestamp.toDate === 'function' ? comment.timestamp.toDate().toISOString() : (comment.timestamp || new Date()).toISOString(), // Ensure timestamp is ISO string
-                 parentId: comment.parentId || null,
-                 likes: comment.likes || 0,
-                 replies: [] // Initialize replies array for nesting
-             };
+             commentsMap[comment.id] = { ...comment, replies: [] }; // Initialize replies array
         });
 
         const nestedComments = [];
         flatComments.forEach(comment => {
             if (comment.parentId && commentsMap[comment.parentId]) {
-                // This is a reply, add it to its parent's replies array
                  if (!commentsMap[comment.parentId].replies) {
                      commentsMap[comment.parentId].replies = [];
                  }
-                 // Push the *nested* comment object from commentsMap
                 commentsMap[comment.parentId].replies.push(commentsMap[comment.id]);
             } else {
-                // This is a top-level comment, add it to the root array
-                nestedComments.push(commentsMap[comment.id]);
+                // Only push top-level comments to the root array
+                if (!comment.parentId) {
+                    nestedComments.push(commentsMap[comment.id]);
+                }
             }
         });
 
@@ -765,16 +856,16 @@ app.listen(port, () => {
         console.log(`Remember to update REACT_APP_BACKEND_API_URL in your React app's environment variables.`);
         console.warn("\n--- Backend Configuration Notes ---");
         console.warn(`Firebase DB: Using Firestore for Comments, Reactions, Audio Likes, Book Views.`);
-        console.warn(`Firebase Config: Requires FIREBASE_SERVICE_ACCOUNT_KEY_PATH or FIREBASE_SERVICE_ACCOUNT JSON in environment.`); // Updated Note
+        console.warn(`Firebase Config: Requires FIREBASE_SERVICE_ACCOUNT_KEY_PATH or FIREBASE_SERVICE_ACCOUNT JSON in environment.`);
         console.warn(`ImageKit Book Folders: /AllBook (PDFs), /AllCover (Covers)`);
         console.warn(`ImageKit Audio Folders: /AllAudio (MP3 etc.), /AllDescription (TXT)`);
         console.warn(`Book Category Logic: Filename prefixes defined in 'categoryPrefixes' array.`);
         console.warn(`Book/Cover Match Logic: Base filename must match exactly (case-insensitive).`);
         console.warn(`Audio Description Match Logic: Base filename of MP3 must match base filename of TXT.`);
         console.warn(`Video Data: Fetched from YouTube Playlists defined in ./server/data/rerngNitenCollectionsConfig.js`);
-        console.warn(`Required Environment Variables: IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT, AUDIO_IMAGEKIT_PUBLIC_KEY, AUDIO_IMAGEKIT_PRIVATE_KEY, AUDIO_IMAGEKIT_URL_ENDPOINT, YOUTUBE_API_KEY, FIREBASE_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT_KEY_PATH`); // Updated required variables
+        console.warn(`Required Environment Variables: IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT, AUDIO_IMAGEKIT_PUBLIC_KEY, AUDIO_IMAGEKIT_PRIVATE_KEY, AUDIO_IMAGEKIT_URL_ENDPOINT, YOUTUBE_API_KEY, FIREBASE_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT_KEY_PATH`);
         console.warn(`🔴 Book views, audio likes, and video comments are stored in Firestore for persistence.`);
-        console.warn(`🔴 Video comments GET endpoint currently returns flat list, not nested tree.`); // Corrected note
+        console.warn(`🔴 Video comments GET endpoint currently returns flat list, not nested tree.`);
         console.warn(`🔴 IMPORTANT: Implement Firestore Security Rules in Firebase Console for Production!`);
     }
 });
