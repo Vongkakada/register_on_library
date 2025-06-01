@@ -16,7 +16,7 @@ const { v4: uuidv4 } = require('uuid'); // For generating unique filenames
 // const path = require('path'); // <--- ไม่ต้อง require ที่นี่อีกต่อไป
 
 const app = express();
-const port = process.env.PORT || 3002;
+const port = process.env.VIP_SERVER_PORT || 3002;
 
 // --- Firebase Admin SDK Initialization ---
 let serviceAccount;
@@ -104,8 +104,7 @@ if (!vipIdPublicKey || !vipIdPrivateKey || !vipIdUrlEndpoint) {
 
 // --- CORS Configuration ---
 const allowedOrigins = [
-    'https://register-on-library.onrender.com', // Your deployed vip registration frontend
-
+    'https://bannalydigital.netlify.app', // Your deployed frontend
 ];
 
 const corsOptions = {
